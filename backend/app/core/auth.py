@@ -10,7 +10,7 @@ from ..database import supabase
 from ..models.auth import AuthenticatedUser, Permission
 from ..config import settings
 from .tenant_resolver import TenantResolver
-
+from .tenant_context import set_tenant_id
 logger = logging.getLogger(__name__)
 
 # Use non-throwing bearer so we can return consistent 401s
@@ -90,6 +90,8 @@ async def authenticate_request(
                 logger.warning(f"AUTH: Cached auth for {cached_user.email} missing tenant_id - forcing refresh")
                 del auth_cache[token_hash]
             else:
+                # ✅ FIX: Set tenant context even for cached users
+                set_tenant_id(cached_user.tenant_id)
                 logger.info(
                     f"AUTH: Using cached authentication for token {token_hash} (tenant: {cached_user.tenant_id}) for user: {cached_user.email}"
                 )
@@ -254,6 +256,12 @@ async def authenticate_request(
 
         # Use TenantResolver for comprehensive tenant resolution
         tenant_id = await TenantResolver.resolve_tenant_id(token=token, user_id=user.id, user_email=user.email)
+        #✅ FIX: Set the tenant context so get_tenant_id() works in endpoints that rely on it (e.g., city_access_fast.py)
+        if tenant_id:
+            set_tenant_id(tenant_id)
+            logger.info(f"✅ Tenant context set: {tenant_id} for user {user.email}")
+        else:
+            logger.warning(f"⚠️ No tenant_id resolved for user {user.email}")
 
         # If we found a tenant_id and it's not in the user's metadata, update it for next time
         current_tenant_in_metadata = None
@@ -511,6 +519,13 @@ async def verify_token_ws(token: str) -> Optional[AuthenticatedUser]:
         # Use the comprehensive tenant resolver (same as regular auth)
         logger.info(f"WS_AUTH: Resolving tenant for user {user.email}")
         tenant_id = await TenantResolver.resolve_tenant_id(token=token, user_id=user.id, user_email=user.email)
+       
+        # ✅ FIX: Set the tenant context so get_tenant_id() works in WebSocket endpoints that rely on it (e.g., city_access_ws.py)
+        if tenant_id:
+            set_tenant_id(tenant_id)
+            logger.info(f"WS_AUTH: ✅ Tenant context set: {tenant_id} for user {user.email}")
+        else:
+            logger.warning(f"WS_AUTH: ⚠️ No tenant_id resolved for user {user.email}")
 
         auth_user = AuthenticatedUser(
             id=user.id,
